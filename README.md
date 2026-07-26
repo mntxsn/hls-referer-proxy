@@ -183,7 +183,7 @@ and can set the Referer itself, so it needs no proxy:
 
 ```sh
 # listen
-ffplay -referer "https://www.wish1075.com/" -nodisp \
+ffplay -referer "https://www.wish1075.com/" -nodisp -vn -infbuf \
   "https://radio.wish1075.com/web/stream/wish.m3u8"
 
 # record
@@ -191,6 +191,20 @@ ffmpeg -referer "https://www.wish1075.com/" \
   -i "https://radio.wish1075.com/web/stream/wish.m3u8" \
   -vn -c:a copy recording.aac
 ```
+
+`-infbuf` is not optional in practice. Without it ffplay caps its input buffer
+at a size meant for local files, and on this stream the audio queue sits around
+13 KB — under a second of audio — so every hiccup in fetching the next
+4-second segment is audible as a dropout. With `-infbuf` the same stream buffers
+around 180 KB, roughly ten seconds, and plays through cleanly.
+
+`-vn` drops the 256x144 video track, which ffplay would otherwise decode at
+30 fps just to throw the frames away. `-nodisp` is still needed alongside it,
+because ffplay opens a window to draw an audio visualisation when there is no
+video to show.
+
+The recording command needs neither: it writes as fast as the origin delivers
+rather than in real time, so buffer depth does not matter.
 
 ## Run it at login (macOS)
 
@@ -217,6 +231,13 @@ station changed what it expects, or `--referer` is wrong.
 
 **Playback stops after a few seconds** — usually the origin being briefly
 unavailable. The proxy holds no state, so restarting the player is enough.
+
+**Audio stutters or drops out** — this is a player-side buffering setting, not
+the proxy. ffplay in particular needs `-infbuf` on any live stream (see
+[Without the proxy](#without-the-proxy) for the numbers). In VLC, raise
+*Preferences → Show All → Input/Codecs → Network caching* from the default
+1000 ms to 3000 ms. Either way, prefer the `/stream.mp3` endpoint if your player
+handles plain streams better than HLS.
 
 ## A note on use
 
