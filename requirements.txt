@@ -1,0 +1,9 @@
+# hls_proxy.py itself runs on the Python standard library alone -- you can skip
+# this file entirely and just run the script.
+#
+# certifi is optional but recommended. The python.org macOS builds ship without
+# a CA bundle unless their "Install Certificates.command" has been run, and
+# without one every HTTPS request to the origin dies with
+# CERTIFICATE_VERIFY_FAILED. Installing certifi fixes that on any platform;
+# the proxy picks it up automatically if it is importable.
+certifi>=2024.2.2

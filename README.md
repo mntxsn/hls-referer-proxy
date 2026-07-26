@@ -94,9 +94,52 @@ It also rewrites every URL inside the playlist to point back at itself, so
 segments, nested playlists and `#EXT-X-KEY` decryption keys all come through
 the proxy rather than being fetched directly from the origin.
 
-## Usage
+## Install
 
-Requires Python 3.9+. No third-party packages.
+Requires Python 3.9 or newer. The proxy runs on the standard library alone, so
+if you are in a hurry this is genuinely all you need:
+
+```sh
+git clone https://github.com/mntxsn/hls-referer-proxy.git
+cd hls-referer-proxy
+python3 hls_proxy.py
+```
+
+### With a virtual environment (recommended)
+
+A venv keeps `certifi` out of your system Python and fixes the
+`CERTIFICATE_VERIFY_FAILED` error that the python.org macOS builds run into:
+
+```sh
+git clone https://github.com/mntxsn/hls-referer-proxy.git
+cd hls-referer-proxy
+
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+python hls_proxy.py
+```
+
+`deactivate` leaves the venv again. To start it later without activating
+anything, call the interpreter inside the venv directly — this is also the form
+to use in the launch agent below:
+
+```sh
+.venv/bin/python hls_proxy.py
+```
+
+### ffmpeg
+
+Only the MP3 and AAC endpoints need it; the HLS endpoint does not. It is a
+system package rather than a Python one, so pip will not install it:
+
+```sh
+brew install ffmpeg          # macOS
+sudo apt install ffmpeg      # Debian/Ubuntu
+```
+
+## Usage
 
 ```sh
 python3 hls_proxy.py
@@ -109,9 +152,6 @@ Then point any player at one of:
 | `http://127.0.0.1:8765/stream.m3u8` | HLS, byte-for-byte the original (AAC 132 kbit/s). Best quality. |
 | `http://127.0.0.1:8765/stream.mp3` | Continuous MP3. Looks like an ordinary Icecast station to apps that cannot do HLS. |
 | `http://127.0.0.1:8765/stream.aac` | AAC in ADTS, remuxed without re-encoding. |
-
-The MP3 and AAC endpoints require `ffmpeg` on your PATH. The HLS endpoint does
-not.
 
 ### In VLC
 
@@ -161,14 +201,16 @@ cp com.hlsproxy.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.hlsproxy.plist
 ```
 
-`command -v python3` tells you the interpreter path to use.
+For the interpreter path, use `.venv/bin/python` from your clone if you set up
+a virtual environment, otherwise whatever `command -v python3` reports. launchd
+does not run your shell profile, so both paths have to be absolute.
 
 ## Troubleshooting
 
 **`CERTIFICATE_VERIFY_FAILED`** — python.org's macOS builds ship without a CA
 bundle until you run their bundled *Install Certificates.command*. The proxy
-works around this by falling back to `certifi` or `/etc/ssl/cert.pem`, but if
-both are missing you will need to run that installer.
+falls back to `certifi` or `/etc/ssl/cert.pem` on its own, so the usual fix is
+`pip install -r requirements.txt` in a venv. Running that installer works too.
 
 **`502 Origin returned 418`** — the origin rejected the Referer. Either the
 station changed what it expects, or `--referer` is wrong.
@@ -188,6 +230,17 @@ Please keep it to personal use. Do not use it to rebroadcast the stream
 publicly or to hammer the origin — that costs the station money and is the
 fastest way to get the endpoint locked down for everyone.
 
+## Sponsor
+
+If this got your station playing in VLC and you would like to say thanks, you
+can sponsor the work at [github.com/sponsors/mntxsn](https://github.com/sponsors/mntxsn).
+
+Entirely optional — the project is MIT and stays that way, with no paid tier
+and nothing held back. A star or a bug report is just as welcome, and if you
+get it working with another station, a note about which one is genuinely
+useful: it tells me whether the playlist rewriting holds up beyond the stream
+it was written for.
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
