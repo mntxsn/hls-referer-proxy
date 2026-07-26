@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Adjust both paths below before installing:
+    - the python3 interpreter ("command -v python3" tells you where yours is)
+    - the location you cloned this repository to
+  Then:
+    cp com.hlsproxy.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.hlsproxy.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hlsproxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3</string>
+        <string>/Users/CHANGEME/hls-referer-proxy/hls_proxy.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/hls-proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/hls-proxy.err</string>
+</dict>
+</plist>
