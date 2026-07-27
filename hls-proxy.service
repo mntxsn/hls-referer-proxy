@@ -1,0 +1,44 @@
+# systemd unit for Linux, including Raspberry Pi OS.
+#
+# Replace CHANGEME with your username (run "whoami") and adjust the paths to
+# wherever you cloned the repository. Then:
+#
+#   sudo cp hls-proxy.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now hls-proxy
+#
+# Drop --host 0.0.0.0 from ExecStart if you only want to listen on the Pi
+# itself rather than from other devices on your network.
+
+[Unit]
+Description=hls-referer-proxy
+Documentation=https://github.com/mntxsn/hls-referer-proxy
+# The Pi often finishes booting before Wi-Fi has associated. The proxy would
+# survive that on its own -- it only warns when the origin is unreachable at
+# startup -- but waiting avoids a confusing line in the journal.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=CHANGEME
+WorkingDirectory=/home/CHANGEME/hls-referer-proxy
+ExecStart=/home/CHANGEME/hls-referer-proxy/.venv/bin/python /home/CHANGEME/hls-referer-proxy/hls_proxy.py --host 0.0.0.0
+
+# Without a venv, use the system interpreter instead:
+# ExecStart=/usr/bin/python3 /home/CHANGEME/hls-referer-proxy/hls_proxy.py --host 0.0.0.0
+
+Restart=always
+RestartSec=10
+
+# The proxy reads no files of its own and writes none, so it can be confined.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

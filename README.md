@@ -206,7 +206,58 @@ video to show.
 The recording command needs neither: it writes as fast as the origin delivers
 rather than in real time, so buffer depth does not matter.
 
-## Run it at login (macOS)
+## Run it permanently
+
+Neither launchd nor systemd runs your shell profile, so every path in the files
+below has to be absolute. Use `.venv/bin/python` from your clone if you set up a
+virtual environment, otherwise whatever `command -v python3` reports.
+
+### Linux and Raspberry Pi (systemd)
+
+A Pi makes a good permanent home for this: leave it running and every device in
+the house can reach the stream. Python 3.9 is enough, so both Bullseye and
+Bookworm work as shipped.
+
+```sh
+sudo apt install python3-venv ffmpeg
+git clone https://github.com/mntxsn/hls-referer-proxy.git
+cd hls-referer-proxy
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Edit `hls-proxy.service` — replace every `CHANGEME` with your username, which
+`whoami` will tell you — then install it:
+
+```sh
+sudo cp hls-proxy.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hls-proxy
+```
+
+`enable` is what makes it come back after a reboot; `--now` also starts it
+immediately. To check on it:
+
+```sh
+systemctl status hls-proxy
+journalctl -u hls-proxy -f      # live log
+sudo systemctl restart hls-proxy
+```
+
+The unit passes `--host 0.0.0.0` so other devices can reach it. Point them at
+`http://<pi-ip>:8765/stream.m3u8`, or `/stream.mp3` for apps that cannot do
+HLS. Find the address with `hostname -I`, and consider giving the Pi a static
+lease in your router so the URL stays put.
+
+Keep this on your own network. Do not forward the port from your router: it
+would expose an open relay to the station's origin, which is a good way to get
+the endpoint locked down for everyone.
+
+On very old hardware such as a Pi Zero, prefer `/stream.m3u8` or `/stream.aac`.
+Both pass the audio through untouched, whereas `/stream.mp3` re-encodes and is
+the only endpoint that costs real CPU.
+
+### macOS (launchd)
 
 Edit the paths in `com.hlsproxy.plist` to match your system, then:
 
@@ -214,10 +265,6 @@ Edit the paths in `com.hlsproxy.plist` to match your system, then:
 cp com.hlsproxy.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.hlsproxy.plist
 ```
-
-For the interpreter path, use `.venv/bin/python` from your clone if you set up
-a virtual environment, otherwise whatever `command -v python3` reports. launchd
-does not run your shell profile, so both paths have to be absolute.
 
 ## Troubleshooting
 
@@ -231,6 +278,11 @@ station changed what it expects, or `--referer` is wrong.
 
 **Playback stops after a few seconds** — usually the origin being briefly
 unavailable. The proxy holds no state, so restarting the player is enough.
+
+**The systemd service will not start** — `journalctl -u hls-proxy -n 50` shows
+why. `status=203/EXEC` means a path in `ExecStart` is wrong; `status=200/CHDIR`
+means `WorkingDirectory` is. Both are usually a `CHANGEME` left in the file, or
+a clone in a different directory than the unit expects.
 
 **Audio stutters or drops out** — this is a player-side buffering setting, not
 the proxy. ffplay in particular needs `-infbuf` on any live stream (see
