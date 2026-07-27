@@ -257,6 +257,57 @@ On very old hardware such as a Pi Zero, prefer `/stream.m3u8` or `/stream.aac`.
 Both pass the audio through untouched, whereas `/stream.mp3` re-encodes and is
 the only endpoint that costs real CPU.
 
+### Synology NAS (Container Manager)
+
+Needs DSM 7.2 or newer, where the package is called Container Manager and can
+run compose projects. The image is built from `python:3.12-slim`, which is
+published for amd64, arm64 and armv7, so it covers both the Intel and the ARM
+Synology models.
+
+**1. Put the files on the NAS.** In File Station, create a folder inside the
+existing `docker` shared folder, for example `docker/hls-proxy`, and upload
+four files into it:
+
+```
+Dockerfile
+docker-compose.yml
+hls_proxy.py
+requirements.txt
+```
+
+**2. Create the project.** Container Manager → *Project* → *Create*:
+
+| Field | Value |
+| --- | --- |
+| Project name | `hls-proxy` |
+| Path | the folder from step 1 |
+| Source | *Use existing docker-compose.yml* |
+
+Confirm through the wizard and let it build. The first build pulls the base
+image and installs ffmpeg, so it takes a few minutes; later starts are instant.
+
+**3. Use it.** The stream is now at `http://<nas-ip>:8765/stream.m3u8`, with
+`/stream.mp3` and `/stream.aac` alongside it. You can find the address under
+Control Panel → Network, and a fixed DHCP lease in your router keeps the URL
+from moving.
+
+`restart: unless-stopped` in the compose file brings the container back after a
+NAS reboot or a crash, but leaves it down if you stop it yourself.
+
+**Ports.** Change only the left-hand number in `"8765:8765"` if something else
+on the NAS already uses it — the right-hand one is fixed by the Dockerfile.
+Avoid ports DSM reserves for itself (5000, 5001, 7000-7999). If you have the
+DSM firewall enabled, allow the port under Control Panel → Security → Firewall.
+Do not forward it from your router; keep this on your own network.
+
+**Without ffmpeg.** Only `/stream.mp3` and `/stream.aac` need it. If HLS is all
+you want, delete the `apt-get` block from the Dockerfile and the image drops
+from roughly 250 MB to 45 MB.
+
+**A different station** — uncomment the `command:` block in `docker-compose.yml`
+and set `--stream-url` and `--referer`. That needs no rebuild, only a restart
+of the project.
+
 ### macOS (launchd)
 
 Edit the paths in `com.hlsproxy.plist` to match your system, then:
@@ -278,6 +329,13 @@ station changed what it expects, or `--referer` is wrong.
 
 **Playback stops after a few seconds** — usually the origin being briefly
 unavailable. The proxy holds no state, so restarting the player is enough.
+
+**The container is unreachable from other devices** — check the port mapping
+took effect (`docker ps` should show `0.0.0.0:8765->8765/tcp`) and that the DSM
+firewall allows the port. Inside the container the proxy always binds
+`0.0.0.0`; what the NAS exposes is decided by the mapping alone. If the
+container's health goes to *unhealthy*, the proxy is running but the origin is
+refusing it — the logs will show the 418.
 
 **The systemd service will not start** — `journalctl -u hls-proxy -n 50` shows
 why. `status=203/EXEC` means a path in `ExecStart` is wrong; `status=200/CHDIR`
