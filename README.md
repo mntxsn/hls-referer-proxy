@@ -330,6 +330,14 @@ station changed what it expects, or `--referer` is wrong.
 **Playback stops after a few seconds** — usually the origin being briefly
 unavailable. The proxy holds no state, so restarting the player is enough.
 
+**The station goes down for a while** — nothing needs restarting. The proxy
+holds no state, retries transient failures, and the `/stream.mp3` and
+`/stream.aac` endpoints keep the listener's connection open through an outage
+and resume on their own once the origin answers again, up to ten minutes. The
+container's health reflects the container, not the station, so an outage does
+not show up as a failed container. Only the raw `/stream.m3u8` endpoint passes
+errors straight through, because an HLS player does its own retrying.
+
 **The container is unreachable from other devices** — check the port mapping
 took effect (`docker ps` should show `0.0.0.0:8765->8765/tcp`) and that the DSM
 firewall allows the port. Inside the container the proxy always binds

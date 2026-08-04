@@ -36,10 +36,13 @@ import binascii
 import functools
 import os
 import re
+import select
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -59,6 +62,13 @@ USER_AGENT = (
 # as well, otherwise the player would fetch decryption keys straight from the
 # origin and hit the Referer check again.
 TAG_URI = re.compile(r'(URI=")([^"]+)(")')
+
+# Outages at the origin are routine: certificates expire, nginx gets restarted,
+# home connections drop. None of that should end a listener's session, so the
+# transcode endpoints ride it out instead of closing the response.
+STALL_TIMEOUT = 20.0        # no audio out of ffmpeg for this long -> restart it
+MAX_OUTAGE = 600.0          # no audio at all for this long -> give up, close
+RECONNECT_DELAY_MAX = 15.0  # ceiling for the backoff between restarts
 
 
 @functools.lru_cache(maxsize=1)
@@ -95,7 +105,15 @@ class Upstream:
         self.referer = referer
         self.host = urllib.parse.urlsplit(stream_url).netloc
 
-    def get(self, url: str, timeout: float = 15.0) -> bytes:
+    def get(self, url: str, timeout: float = 15.0, retries: int = 2) -> bytes:
+        """Fetch from the origin, retrying briefly on transient failures.
+
+        A dropped connection or a 5xx is usually gone again a second later, and
+        riding those out here keeps a momentary blip from surfacing to the
+        player as a hard error. Deterministic answers are not retried: a 418
+        means the Referer was rejected and a 404 means a segment has rolled out
+        of the live window, and hammering either just adds delay.
+        """
         request = urllib.request.Request(
             url,
             headers={
@@ -104,8 +122,27 @@ class Upstream:
                 "Accept": "*/*",
             },
         )
-        with urllib.request.urlopen(request, timeout=timeout, context=ssl_context()) as response:
-            return response.read()
+        delay = 0.5
+        for attempt in range(retries + 1):
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=timeout, context=ssl_context()
+                ) as response:
+                    return response.read()
+            except urllib.error.HTTPError as exc:
+                if exc.code < 500 or attempt == retries:
+                    raise
+            except urllib.error.URLError as exc:
+                # An expired or otherwise invalid certificate is not going to
+                # fix itself within the retry window either.
+                if isinstance(exc.reason, ssl.SSLCertVerificationError) or attempt == retries:
+                    raise
+            except (TimeoutError, OSError):
+                if attempt == retries:
+                    raise
+            time.sleep(delay)
+            delay *= 2
+        raise AssertionError("unreachable")  # the loop either returns or raises
 
     def resolve(self, reference: str) -> str:
         """Turn a playlist entry into an absolute URL on the origin.
@@ -306,11 +343,15 @@ class Handler(BaseHTTPRequestHandler):
 
         cmd = [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
+            "-reconnect", "1", "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "5",
+            # Plain -reconnect does not cover HTTP error responses, so while the
+            # origin is down ffmpeg would see one 502 from our own playlist
+            # endpoint and exit. That ended the listener's session for good.
+            "-reconnect_on_http_error", "4xx,5xx",
             "-i", source,
             "-vn", *codec, "-",
         ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
         # No Content-Length is possible for an open-ended stream, and chunked
         # encoding confuses some radio apps, so close the connection at the end.
@@ -322,17 +363,72 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.close_connection = True
 
-        try:
-            while True:
-                chunk = proc.stdout.read(8192)
+        # Both formats are a bare sequence of frames, so a listener that joins
+        # a restarted ffmpeg mid-stream just carries on. That is what lets the
+        # response survive an outage rather than ending at the first error.
+        outage_since = None
+        backoff = 1.0
+        while True:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
+            try:
+                delivered, client_gone = self.pump(proc)
+            finally:
+                proc.kill()
+                proc.wait()
+
+            if client_gone:
+                return
+            if delivered:
+                outage_since = None
+                backoff = 1.0
+            elif outage_since is None:
+                outage_since = time.monotonic()
+                sys.stderr.write("upstream unavailable, holding the connection open\n")
+            elif time.monotonic() - outage_since > MAX_OUTAGE:
+                sys.stderr.write("upstream still down, closing the connection\n")
+                return
+
+            time.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_DELAY_MAX)
+
+    def pump(self, proc) -> tuple[bool, bool]:
+        """Forward one ffmpeg run to the client.
+
+        Returns (delivered anything, client hung up). Watching the client
+        socket alongside ffmpeg's output matters during an outage: with no
+        audio to write there is nothing that would raise BrokenPipeError, so
+        without this a listener who gave up would leave the retry loop running.
+        """
+        delivered = False
+        last_data = time.monotonic()
+        while True:
+            ready, _, _ = select.select([proc.stdout, self.connection], [], [], 1.0)
+
+            if self.connection in ready:
+                try:
+                    if not self.connection.recv(1024, socket.MSG_PEEK):
+                        return delivered, True
+                except (BrokenPipeError, ConnectionResetError):
+                    return delivered, True
+                except OSError:
+                    pass
+
+            if proc.stdout in ready:
+                chunk = proc.stdout.read1(65536)
                 if not chunk:
-                    break
-                self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        finally:
-            proc.kill()
-            proc.wait()
+                    return delivered, False        # ffmpeg exited
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return delivered, True
+                delivered = True
+                last_data = time.monotonic()
+            elif time.monotonic() - last_data > STALL_TIMEOUT:
+                return delivered, False            # wedged, let the caller restart it
+
+            if proc.poll() is not None and proc.stdout not in ready:
+                return delivered, False
 
 
 class ProxyServer(ThreadingHTTPServer):
